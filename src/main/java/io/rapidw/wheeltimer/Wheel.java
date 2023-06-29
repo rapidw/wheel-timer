@@ -21,7 +21,7 @@ class Wheel {
     // 本轮的开始时间
     @Getter
     @Setter
-    private volatile long baseTime;
+    private volatile long baseTime; // millis
     @Getter
     private final Wheel prev;
 
@@ -35,15 +35,15 @@ class Wheel {
         this.prev = prev;
         log.debug("new wheel, tick duration={}", tickDuration);
         for (int i = 0; i < this.buckets.length; i++) {
-            this.buckets[i] = new Bucket(this, timeUnit.toNanos(tickDuration) * (i + 1));
+            this.buckets[i] = new Bucket(this, timeUnit.toMillis(tickDuration) * (i + 1));
         }
     }
 
     public Bucket addTask(TimerTaskHandle handle) {
         // 找到bucket并放入
         val delayNanos = handle.getDeadline() - this.baseTime;
-        log.debug("add task, delay={}, wheel duration={}", TimeUnit.SECONDS.convert(delayNanos, TimeUnit.NANOSECONDS), TimeUnit.SECONDS.convert(tickDuration, timeUnit));
-        val no = delayNanos / timeUnit.toNanos(tickDuration) % tickCount - 1;
+        log.debug("add task, delay={}, wheel duration={}", TimeUnit.SECONDS.convert(delayNanos, TimeUnit.MILLISECONDS), TimeUnit.SECONDS.convert(tickDuration, timeUnit));
+        val no = delayNanos / timeUnit.toMillis(tickDuration) % tickCount - 1;
         log.debug("add task to bucket no={}", no);
         Bucket bucket = this.buckets[(int)no];
         bucket.add(handle);
@@ -52,5 +52,9 @@ class Wheel {
 
     public String toString() {
         return String.format("轮子tickCount:%d, tickDuration:%d, baseTime:%d", tickCount, tickDuration, baseTime);
+    }
+
+    public long getDurationMillis() {
+        return tickCount * timeUnit.toMillis(tickDuration);
     }
 }

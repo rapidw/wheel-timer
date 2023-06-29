@@ -21,48 +21,54 @@ public class Timer {
     private final int tickDuration;
     private final TimeUnit tickTimeUnit;
     private final Thread workerThread;
+
     private enum WorkerThreadStatus {
         INIT,
         START,
         SHUTDOWN,
     }
-    private final AtomicEnum<WorkerThreadStatus> workerThreadStatus = new AtomicEnum<>(WorkerThreadStatus.INIT);
-    private final CountDownLatch startTimeInitialized = new CountDownLatch(1);
+
+    private final AtomicEnum<WorkerThreadStatus> workerThreadStatus;
+    // global start time
+    private volatile long startTime;
+    private final CountDownLatch startTimeInitialized;
 
     private Queue<TimerTaskHandle> cancelledHandles = new ConcurrentLinkedQueue<>();
-    private final MyDelayQueue<Bucket> bucketDelayQueue = new MyDelayQueue<>();
-    private volatile long startTime;
+    private final MyDelayQueue<Bucket> bucketDelayQueue;
+
 
     @Builder
     public Timer(ThreadFactory workerThreadFactory, int tickPerWheel, int tickDuration, TimeUnit tickTimeUnit) {
+        this.workerThreadStatus = new AtomicEnum<>(WorkerThreadStatus.INIT);
+        this.startTimeInitialized = new CountDownLatch(1);
         this.workerThread = workerThreadFactory.newThread(new Worker());
         this.tickPerWheel = tickPerWheel;
         this.tickDuration = tickDuration;
         this.tickTimeUnit = tickTimeUnit;
 
         this.wheels = new LinkedList<>();
-
+        this.bucketDelayQueue = new MyDelayQueue<>();
     }
 
     public void start() {
-
         switch (workerThreadStatus.get()) {
-            case INIT:
+            case INIT -> {
                 if (workerThreadStatus.compareAndSet(WorkerThreadStatus.INIT, WorkerThreadStatus.START)) {
                     workerThread.start();
                 }
-            case START:
-                break;
-            case SHUTDOWN:
-                throw new IllegalStateException("cannot be started once stopped");
-            default:
-                throw new Error("invalid worker thread state");
+            }
+            case START -> {}
+            case SHUTDOWN ->
+                throw new TimerException("cannot be started once stopped");
+            default ->
+                throw new TimerException("invalid worker thread state");
         }
 
+        // wait until startTime is initialized by the worker thread
         while (startTime == 0) {
             try {
                 startTimeInitialized.await();
-            } catch (InterruptedException e) {
+            } catch (InterruptedException ignored) {
 
             }
         }
@@ -73,21 +79,23 @@ public class Timer {
     }
 
     public TimerTaskHandle addTask(TimerTask task, long delay, TimeUnit timeUnit) {
+        // timer must be started before add task
         start();
-        val deadline = System.nanoTime() + timeUnit.toNanos(delay);
+        // time resolution is millisecond
+        val deadline = System.currentTimeMillis() + timeUnit.toMillis(delay);
+
         val handle = TimerTaskHandle.builder()
                 .task(task)
                 .deadline(deadline)
                 .build();
-        val currentNanos = System.nanoTime();
+        val currentMillis = System.currentTimeMillis();
 
-//        val tickDurationNanos = tickTimeUnit.toNanos(tickDuration);
         // 不采用netty的下个tick时处理的方案，因为时间推进是由delayQueue进行的，避免空推进
         synchronized (wheels) {
             // 最大的轮的时长
 
             Wheel wheel;
-            if (wheels.size() == 0) {
+            if (wheels.isEmpty()) {
                 // 当前没有轮，则新增
                 wheel = appendWheel(delay, timeUnit, true);
                 val bucket = wheel.addTask(handle);
@@ -96,8 +104,7 @@ public class Timer {
             } else {
                 // 当前有轮
                 wheel = wheels.getLast();
-                val maxWheelDuration = wheel.getTimeUnit().toNanos(wheel.getTickDuration()) * wheel.getTickCount() * wheel.getTickCount();
-                if (currentNanos + timeUnit.toNanos(delay) - wheel.getBaseTime() > maxWheelDuration) {
+                if (currentMillis + timeUnit.toMillis(delay) - wheel.getBaseTime() > wheel.getDurationMillis()) {
                     // 比当前最大的轮还要长，需要在最后加轮，并放进新加的轮里
 
                     wheel = appendWheel(delay, timeUnit, false);
@@ -109,9 +116,7 @@ public class Timer {
                     Wheel prev = null;
                     while (iter.hasNext()) {
                         wheel = iter.next();
-                        // 当前轮的时长
-                        val wheelDuration = wheel.getTimeUnit().toNanos(wheel.getTickDuration()) * wheel.getTickCount();
-                        if (currentNanos + timeUnit.toNanos(delay) < wheel.getBaseTime() + wheelDuration) {
+                        if (currentMillis + timeUnit.toMillis(delay) < wheel.getBaseTime() + wheel.getDurationMillis()) {
                             // 如果延迟在这个轮的范围内
                             prev = wheel;
                         } else if (prev != null) {
@@ -137,10 +142,10 @@ public class Timer {
      * @return
      */
     private Wheel appendWheel(long delay, TimeUnit timeUnit, boolean firstWheel) {
-        long res = timeUnit.toNanos(delay) / (tickTimeUnit.toNanos(tickDuration) * tickPerWheel);
+        long res = timeUnit.toMillis(delay) / (tickTimeUnit.toMillis(tickDuration) * tickPerWheel);
         int currentTickDuration = tickDuration;
         Wheel prev = null;
-        if (wheels.size() != 0) {
+        if (!wheels.isEmpty()) {
             prev = wheels.getLast();
         }
         Wheel current;
@@ -148,7 +153,7 @@ public class Timer {
                 .tickCount(tickPerWheel)
                 .tickDuration(currentTickDuration)
                 .timeUnit(tickTimeUnit)
-                .baseTime(this.startTime)
+                .baseTime(this.startTime) // is this correct?
                 .prev(prev)
                 .build();
         prev = current;
@@ -160,23 +165,33 @@ public class Timer {
                      .tickCount(tickPerWheel)
                      .tickDuration(currentTickDuration)
                      .timeUnit(tickTimeUnit)
-                     .baseTime(this.startTime)
+                     .baseTime(this.startTime) // is this correct?
                      .prev(prev)
                      .build();
             wheels.addLast(current);
             prev = current;
 
-            res = res / (tickDuration * tickPerWheel);
+            res = res / ((long) tickDuration * tickPerWheel);
         }
         log.debug("current wheel list size={}", wheels.size());
         return current;
+    }
+
+    private static Wheel appendWheel(Wheel prev, int tickPerWheel, int tickDuration, TimeUnit tickTimeUnit) {
+        return Wheel.builder()
+                .tickCount(tickPerWheel)
+                .tickDuration(tickDuration)
+                .timeUnit(tickTimeUnit)
+                .baseTime(prev.getBaseTime() + prev.getTimeUnit().toMillis(prev.getTickDuration()) * prev.getTickCount())
+                .prev(prev)
+                .build();
     }
 
     private class Worker implements Runnable {
         @Override
         @SneakyThrows
         public void run() {
-            startTime = System.nanoTime();
+            startTime = System.currentTimeMillis();
             startTimeInitialized.countDown();
             do {
                 Bucket bucket = bucketDelayQueue.take();
@@ -188,16 +203,14 @@ public class Timer {
                     // 任务降轮，重新设置baseTime
                     log.debug("NOT first wheel bucket, downgrade");
                     val wheelPrev = bucket.getWheel().getPrev();
-                    wheelPrev.setBaseTime(wheelPrev.getBaseTime() + wheelPrev.getTimeUnit().toNanos(wheelPrev.getTickDuration()) * wheelPrev.getTickCount());
+                    wheelPrev.setBaseTime(wheelPrev.getBaseTime() + wheelPrev.getDurationMillis());
                     val iter = bucket.iterator();
                     while (iter.hasNext()) {
                         val newBucket =  wheelPrev.addTask(iter.next());
                         bucketDelayQueue.add(newBucket);
                         iter.remove();
                     }
-
                 }
-
             } while (workerThreadStatus.get() == WorkerThreadStatus.START);
         }
     }

@@ -38,8 +38,8 @@ class Bucket implements Delayed, Iterable<TimerTaskHandle> {
 
     @Override
     public long getDelay(TimeUnit unit) {
-        long duration = wheel.getBaseTime() + delay - System.nanoTime();
-        return unit.convert(duration, TimeUnit.NANOSECONDS);
+        long duration = wheel.getBaseTime() + delay - System.currentTimeMillis();
+        return unit.convert(duration, TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -49,8 +49,8 @@ class Bucket implements Delayed, Iterable<TimerTaskHandle> {
             log.debug("return equal");
             return 0;
         }
-        long delay1 = getDelay(TimeUnit.NANOSECONDS);
-        long delay2 = o.getDelay(TimeUnit.NANOSECONDS);
+        long delay1 = getDelay(TimeUnit.MILLISECONDS);
+        long delay2 = o.getDelay(TimeUnit.MILLISECONDS);
         log.debug("delay1={}, delay2={}", delay1, delay2);
         val res = delay1 - delay2;
         if (res > 0) {

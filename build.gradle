@@ -1,23 +1,29 @@
 plugins {
     id 'java-library'
-    id 'io.freefair.lombok' version '5.2.1'
+    id 'groovy'
+    id 'io.freefair.lombok' version '8.0.1'
 }
 
 repositories {
-    maven {
-        url "https://maven.aliyun.com/repository/public"
-    }
     mavenCentral()
 }
 
 dependencies {
 
-    implementation 'org.slf4j:slf4j-api:1.7.30'
-    testImplementation 'ch.qos.logback:logback-classic:1.2.3'
-    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.5.1'
-    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.5.1'
+    implementation 'org.slf4j:slf4j-api:1.7.32'
+    testImplementation 'ch.qos.logback:logback-classic:1.2.10'
 }
 
-test {
-    useJUnitPlatform()
+testing {
+    suites {
+        test {
+            useSpock('2.2-groovy-3.0')
+        }
+    }
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
 }
