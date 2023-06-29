@@ -36,7 +36,6 @@ public class Timer {
     private Queue<TimerTaskHandle> cancelledHandles = new ConcurrentLinkedQueue<>();
     private final MyDelayQueue<Bucket> bucketDelayQueue;
 
-
     @Builder
     public Timer(ThreadFactory workerThreadFactory, int tickPerWheel, int tickDuration, TimeUnit tickTimeUnit) {
         this.workerThreadStatus = new AtomicEnum<>(WorkerThreadStatus.INIT);
@@ -142,23 +141,24 @@ public class Timer {
      * @return
      */
     private Wheel appendWheel(long delay, TimeUnit timeUnit, boolean firstWheel) {
-        long res = timeUnit.toMillis(delay) / (tickTimeUnit.toMillis(tickDuration) * tickPerWheel);
-        int currentTickDuration = tickDuration;
+        long res = timeUnit.toMillis(delay) / (tickTimeUnit.toMillis(this.tickDuration) * this.tickPerWheel);
+        int currentTickDuration = this.tickDuration;
         Wheel prev = null;
         if (!wheels.isEmpty()) {
             prev = wheels.getLast();
         }
         Wheel current;
         current = Wheel.builder()
-                .tickCount(tickPerWheel)
+                .tickCount(this.tickPerWheel)
                 .tickDuration(currentTickDuration)
-                .timeUnit(tickTimeUnit)
+                .timeUnit(this.tickTimeUnit)
                 .baseTime(this.startTime) // is this correct?
                 .prev(prev)
                 .build();
         prev = current;
         wheels.addLast(prev);
 
+        // total duration of next wheel
         currentTickDuration = currentTickDuration * tickPerWheel;
         while (res > 0) {
              current = Wheel.builder()

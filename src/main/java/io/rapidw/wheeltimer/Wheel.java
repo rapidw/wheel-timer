@@ -51,7 +51,7 @@ class Wheel {
     }
 
     public String toString() {
-        return String.format("轮子tickCount:%d, tickDuration:%d, baseTime:%d", tickCount, tickDuration, baseTime);
+        return String.format("wheel tickCount:%d, tickDuration:%d, baseTime:%d", tickCount, tickDuration, baseTime);
     }
 
     public long getDurationMillis() {
