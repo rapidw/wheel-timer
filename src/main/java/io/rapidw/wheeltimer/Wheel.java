@@ -22,6 +22,8 @@ class Wheel {
     @Getter
     @Setter
     private volatile long baseTime; // millis
+
+    // 前一个轮子，最前一个没有prev
     @Getter
     private final Wheel prev;
 

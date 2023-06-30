@@ -12,15 +12,21 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 public class Timer {
 
-    private final LinkedList<Wheel> wheels;
+
     private final int tickPerWheel;
     private final int tickDuration;
     private final TimeUnit tickTimeUnit;
     private final Thread workerThread;
+
+    private final LinkedList<Wheel> wheels = new LinkedList<>();
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition condition = lock.newCondition();
 
     private enum WorkerThreadStatus {
         INIT,
@@ -34,7 +40,7 @@ public class Timer {
     private final CountDownLatch startTimeInitialized;
 
     private Queue<TimerTaskHandle> cancelledHandles = new ConcurrentLinkedQueue<>();
-    private final MyDelayQueue<Bucket> bucketDelayQueue;
+//    private final MyDelayQueue<Bucket> bucketDelayQueue;
 
     @Builder
     public Timer(ThreadFactory workerThreadFactory, int tickPerWheel, int tickDuration, TimeUnit tickTimeUnit) {
@@ -45,8 +51,7 @@ public class Timer {
         this.tickDuration = tickDuration;
         this.tickTimeUnit = tickTimeUnit;
 
-        this.wheels = new LinkedList<>();
-        this.bucketDelayQueue = new MyDelayQueue<>();
+//        this.bucketDelayQueue = new MyDelayQueue<>();
     }
 
     public void start() {
