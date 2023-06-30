@@ -1,25 +1,28 @@
 package io.rapidw.wheeltimer;
 
+import lombok.Data;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
-class Bucket implements Delayed, Iterable<TimerTaskHandle> {
+class Bucket implements Iterable<TimerTaskHandle> {
 
     private final LinkedList<TimerTaskHandle> handles = new LinkedList<>();
     @Getter
     private final Wheel wheel;
-    private final long delay;
+    private final Instant deadline;
 
-    public Bucket(Wheel wheel, long delay) {
+    public Bucket(Wheel wheel, Instant deadline) {
         this.wheel = wheel;
-        this.delay = delay;
+        this.deadline = deadline;
     }
     public void add(TimerTaskHandle handle) {
         handles.add(handle);
@@ -36,30 +39,8 @@ class Bucket implements Delayed, Iterable<TimerTaskHandle> {
         handles.clear();
     }
 
-    @Override
-    public long getDelay(TimeUnit unit) {
-        long duration = wheel.getBaseTime() + delay - System.currentTimeMillis();
-        return unit.convert(duration, TimeUnit.MILLISECONDS);
-    }
-
-    @Override
-    public int compareTo(Delayed o) {
-        log.debug("compare called");
-        if (this == o) {
-            log.debug("return equal");
-            return 0;
-        }
-        long delay1 = getDelay(TimeUnit.MILLISECONDS);
-        long delay2 = o.getDelay(TimeUnit.MILLISECONDS);
-        log.debug("delay1={}, delay2={}", delay1, delay2);
-        val res = delay1 - delay2;
-        if (res > 0) {
-            return 1;
-        } else if (res == 0) {
-            return 0;
-        } else {
-            return -1;
-        }
+    public Instant getDeadline() {
+        return deadline;
     }
 
     @Override

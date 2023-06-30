@@ -3,6 +3,8 @@ package io.rapidw.wheeltimer;
 import lombok.Builder;
 import lombok.Getter;
 
+import java.time.Instant;
+
 
 public class TimerTaskHandle {
 
@@ -10,12 +12,12 @@ public class TimerTaskHandle {
     private final TimerTask task;
     @Getter
     // nanos
-    private final long deadline;
+    private final Instant deadline;
     private volatile boolean canceled = false;
     private volatile boolean expired = false;
 
     @Builder
-    public TimerTaskHandle(TimerTask task, long deadline) {
+    public TimerTaskHandle(TimerTask task, Instant deadline) {
         this.task = task;
         this.deadline = deadline;
     }
