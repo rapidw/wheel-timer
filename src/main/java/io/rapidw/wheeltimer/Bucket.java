@@ -18,11 +18,11 @@ class Bucket implements Iterable<TimerTaskHandle> {
     private final LinkedList<TimerTaskHandle> handles = new LinkedList<>();
     @Getter
     private final Wheel wheel;
-    private final Instant deadline;
+    private final int deadlineOffset;
 
-    public Bucket(Wheel wheel, Instant deadline) {
+    public Bucket(Wheel wheel, int deadlineOffset) {
         this.wheel = wheel;
-        this.deadline = deadline;
+        this.deadlineOffset = deadlineOffset;
     }
     public void add(TimerTaskHandle handle) {
         handles.add(handle);
@@ -40,7 +40,7 @@ class Bucket implements Iterable<TimerTaskHandle> {
     }
 
     public Instant getDeadline() {
-        return deadline;
+        return wheel.getBaseTime().plus(Duration.of(deadlineOffset, wheel.getTimeUnit()));
     }
 
     @Override
@@ -48,9 +48,11 @@ class Bucket implements Iterable<TimerTaskHandle> {
         return handles.iterator();
     }
 
-    @Override
-    public String toString() {
+    public boolean isEmpty() {
+        return handles.isEmpty();
+    }
 
-        return super.toString();
+    public void clear() {
+        handles.clear();
     }
 }
