@@ -192,6 +192,7 @@ public class Timer {
     private class Worker implements Runnable {
         @Override
         public void run() {
+
             lock.lock();
             log.debug("###LOCK###");
             try {
