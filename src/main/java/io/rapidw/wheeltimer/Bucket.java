@@ -33,7 +33,9 @@ class Bucket implements Iterable<TimerTaskHandle> {
         {
             if (!handle.isCancelled()) {
                 handle.setExpired();
-                handle.getTask().run(false, false);
+                handle.getTask().run(handle);
+            } else {
+                log.debug("WARNING:: canceled task run");
             }
         });
         handles.clear();
@@ -54,5 +56,9 @@ class Bucket implements Iterable<TimerTaskHandle> {
 
     public void clear() {
         handles.clear();
+    }
+
+    public void remove(TimerTaskHandle handle) {
+        handles.remove(handle);
     }
 }

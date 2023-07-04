@@ -1,6 +1,5 @@
 package io.rapidw.wheeltimer
 
-import lombok.val
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import spock.lang.Specification
@@ -8,7 +7,6 @@ import spock.lang.Specification
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 class TimerSpec extends Specification {
 
@@ -24,14 +22,28 @@ class TimerSpec extends Specification {
                 .build();
         def now = Instant.now()
         logger.debug("adding 5")
-        timer.addTask((isExpired, isCancelled) -> logger.info("run 5"), now.plus(5, ChronoUnit.SECONDS))
+        timer.addTask((handle) -> logger.info("run 5"), now.plus(5, ChronoUnit.SECONDS))
         logger.debug("adding 2")
-        timer.addTask((isExpired, isCancelled) -> logger.info("run 2"), now.plus(2, ChronoUnit.SECONDS))
+        timer.addTask((handle) -> logger.info("run 2"), now.plus(2, ChronoUnit.SECONDS))
         logger.debug("sleeping")
-        Thread.sleep(8000)
+        timer.addTask((handle) -> logger.info("run 18"), now.plus(18, ChronoUnit.SECONDS))
+        Thread.sleep(20000)
         logger.debug("sleep finished")
+    }
 
-        expect:
-        1 == 1
+    def "cancel"() {
+        given:
+        def timer = Timer.builder()
+                .workerThreadFactory(Executors.defaultThreadFactory())
+                .tickDuration(1)
+                .tickTimeUnit(ChronoUnit.SECONDS)
+                .tickPerWheel(3)
+                .build();
+        def now = Instant.now()
+        logger.debug("adding 2")
+        def handle = timer.addTask((handle) -> logger.info("run 2"), now.plus(2, ChronoUnit.SECONDS))
+        Thread.sleep(1000)
+        handle.cancel()
+        Thread.sleep(2000)
     }
 }

@@ -6,6 +6,7 @@ import lombok.Builder;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import org.slf4j.LoggerFactory;
 import org.w3c.dom.ls.LSException;
 
 import java.time.Duration;
@@ -14,6 +15,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.PrimitiveIterator;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -44,7 +46,6 @@ public class Timer {
     }
 
     private final AtomicEnum<WorkerThreadStatus> workerThreadStatus;
-    // global start time
     private final Instant startTime;
 
     private Queue<TimerTaskHandle> cancelledHandles = new ConcurrentLinkedQueue<>();
@@ -74,8 +75,12 @@ public class Timer {
         }
     }
 
-    public void stop() {
+    /**
+     * return all uncanceled tasks
+     */
+    public List<TimerTaskHandle> stop() {
         workerThreadStatus.set(WorkerThreadStatus.SHUTDOWN);
+        return null;
     }
 
     public TimerTaskHandle addTask(TimerTask task, Instant deadline) {
@@ -84,13 +89,13 @@ public class Timer {
         start();
 
         val handle = TimerTaskHandle.builder()
+                .timer(this)
                 .task(task)
                 .deadline(deadline)
                 .build();
 
         // 不采用netty的下个tick时处理的方案，因为时间推进是由delayQueue进行的，避免空推进
         lock.lock();
-        // 最大的轮的时长
 
         if (wheels.isEmpty()) {
             log.debug("no wheel");
@@ -180,14 +185,18 @@ public class Timer {
         return current;
     }
 
+    void cancelTask(TimerTaskHandle handle) {
+        this.cancelledHandles.add(handle);
+    }
+
     private class Worker implements Runnable {
         @Override
-        @SneakyThrows
         public void run() {
-            do {
-                lock.lock();
-                log.debug("worker get lock");
-                while (true) {
+            lock.lock();
+            log.debug("###LOCK###");
+            try {
+                while (workerThreadStatus.get() == WorkerThreadStatus.START) {
+                    processCancelledTasks();
                     if (firstBucket == null) {
                         // 当前没有定时器
                         log.debug("no bucket, await");
@@ -196,11 +205,14 @@ public class Timer {
                     } else {
                         // 有定时器，取出第一个bucket的延时
                         log.debug("firstBucket deadline: {}", Formatter.formatInstant(firstBucket.getDeadline()));
-                        val delay = Duration.between(Instant.now(), firstBucket.getDeadline()).toMillis();
-                        if (delay > 0) {
+                        val delay = Duration.between(Instant.now(), firstBucket.getDeadline());
+                        if (!delay.isNegative()) {
                             // 如果延时>0，等待
                             log.debug("wait for first bucket, delay: {}", delay);
-                            condition.await(delay, TimeUnit.MILLISECONDS);
+                            val res = condition.awaitNanos(delay.toNanos());
+                            if (res > 0) {
+                                log.debug("insufficient delay");
+                            }
                         } else {
                             // 延时<0，立即执行
                             log.debug("run first bucket");
@@ -227,23 +239,33 @@ public class Timer {
                                 firstBucket.runAndClearTasks();
                                 firstBucket = findNextBucket();
                             }
-                            break;
                         }
                     }
                 }
+            } catch (InterruptedException e) {
+                log.debug("thread interrupted");
+            } finally {
                 lock.unlock();
-            } while (workerThreadStatus.get() == WorkerThreadStatus.START);
-        }
-    }
-
-    private Bucket findNextBucket() {
-        for (Wheel wheel : wheels) {
-            val bucket = wheel.findFirstBucket();
-            if (bucket != null) {
-                return bucket;
+                log.debug("###UNLOCK###");
             }
         }
-        return null;
-    }
 
+        private void processCancelledTasks() {
+            log.debug("process cancelled tasks");
+            for (TimerTaskHandle handle : cancelledHandles) {
+                handle.getBucket().remove(handle);
+            }
+            cancelledHandles.clear();
+        }
+
+        private Bucket findNextBucket() {
+            for (Wheel wheel : wheels) {
+                val bucket = wheel.findFirstBucket();
+                if (bucket != null) {
+                    return bucket;
+                }
+            }
+            return null;
+        }
+    }
 }

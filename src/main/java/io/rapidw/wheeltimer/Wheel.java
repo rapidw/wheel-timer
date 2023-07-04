@@ -59,6 +59,7 @@ class Wheel {
         log.debug("add task to bucket no={}", no);
         Bucket bucket = this.buckets[(int)no];
         bucket.add(handle);
+        handle.setBucket(bucket);
         return bucket;
     }
 

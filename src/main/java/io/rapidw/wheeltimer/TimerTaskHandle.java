@@ -2,31 +2,34 @@ package io.rapidw.wheeltimer;
 
 import lombok.Builder;
 import lombok.Getter;
+import lombok.Setter;
 
+import java.sql.Time;
 import java.time.Instant;
-
 
 public class TimerTaskHandle {
 
     @Getter
     private final TimerTask task;
     @Getter
-    // nanos
     private final Instant deadline;
+    private final Timer timer;
+    @Setter(lombok.AccessLevel.PACKAGE)
+    @Getter(lombok.AccessLevel.PACKAGE)
+    private Bucket bucket;
     private volatile boolean canceled = false;
     private volatile boolean expired = false;
 
     @Builder
-    public TimerTaskHandle(TimerTask task, Instant deadline) {
+    public TimerTaskHandle(Timer timer, TimerTask task, Instant deadline) {
+        this.timer = timer;
         this.task = task;
         this.deadline = deadline;
     }
-//    private Instant getDeadline() {
-//        return Instant.ofEpochSecond(deadlineNanos / 1_000_000_000, deadlineNanos % 1_000_000_000);
-//    }
 
     public void cancel() {
         this.canceled = true;
+        timer.cancelTask(this);
     }
     void setExpired() {
         this.expired = true;
