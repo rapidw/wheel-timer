@@ -1,38 +1,31 @@
 package io.rapidw.wheeltimer;
 
 import io.rapidw.wheeltimer.utils.Formatter;
-import lombok.Builder;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-import lombok.val;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
 
-@Slf4j
 class Wheel {
-
-    @Getter
+    private static final Logger logger = LoggerFactory.getLogger(Wheel.class);
+    
     private final int level;
-    @Getter
     private final int tickCount;
-    @Getter
     private final int tickDuration;
-    @Getter
     private final ChronoUnit timeUnit;
     private final Bucket[] buckets;
-    // 本轮的开始时间
-    @Getter
-    @Setter
+    // base time of this wheel, will be updated when the wheel is empty and a new task is added
     private Instant baseTime; // millis
 
-    // 前一个轮子，最前一个没有prev
-    @Getter
+    // previous wheel, first wheel has no previous wheel
     private final Wheel prev;
 
-    @Builder
+    
     public Wheel(int tickCount, int tickDuration, ChronoUnit timeUnit, Instant baseTime, Wheel prev) {
         this.tickCount = tickCount;
         this.tickDuration = tickDuration;
@@ -41,7 +34,7 @@ class Wheel {
         this.buckets = new Bucket[tickCount];
         this.prev = prev;
         this.level = prev == null ? 1 : prev.getLevel() + 1;
-        log.debug("new wheel, tick duration={}, tickCount={}, baseTime={}", tickDuration, tickCount, Formatter.formatInstant(baseTime));
+        logger.debug("new wheel, tick duration={}, tickCount={}, baseTime={}", tickDuration, tickCount, Formatter.formatInstant(baseTime));
         for (int i = 0; i < this.buckets.length; i++) {
             this.buckets[i] = new Bucket(this, i * tickDuration);
         }
@@ -50,17 +43,26 @@ class Wheel {
     public Bucket addTask(TimerTaskHandle handle) {
         // 如果当前轮是空的，则修改baseTime
         if (this.isEmpty()) {
-            log.debug("update baseTime");
+            logger.debug("update baseTime, old baseTime {}", Formatter.formatInstant(this.baseTime));
+            // new baseTime should be integral times of tickDuration plus old baseTime
             this.baseTime = this.baseTime.plus(Duration.between(this.baseTime, handle.getDeadline()).get(timeUnit) / tickDuration / tickCount * tickCount * tickDuration, timeUnit);
         }
         // 找到bucket并放入
-        val no = Duration.between(this.baseTime, handle.getDeadline()).get(timeUnit) / tickDuration % tickCount;
-        log.debug("add task, deadline={}, wheel level={},  baseTime={}", Formatter.formatInstant(handle.getDeadline()), this.level, Formatter.formatInstant(this.baseTime));
-        log.debug("add task to bucket no={}", no);
+        var no = Duration.between(this.baseTime, handle.getDeadline()).get(timeUnit) / tickDuration % tickCount;
+        logger.debug("add task, deadline={}, wheel level={},  baseTime={}", Formatter.formatInstant(handle.getDeadline()), this.level, Formatter.formatInstant(this.baseTime));
+        logger.debug("add task to bucket no={}", no);
         Bucket bucket = this.buckets[(int)no];
         bucket.add(handle);
         handle.setBucket(bucket);
         return bucket;
+    }
+
+    Instant findNewBaseTime(Instant instant) {
+        if (isEmpty()) {
+            return this.baseTime.plus(Duration.between(this.baseTime, instant).get(timeUnit) / tickDuration / tickCount * tickCount * tickDuration, timeUnit);
+        } else {
+            return this.baseTime;
+        }
     }
 
     public int getTotalDuration() {
@@ -71,21 +73,39 @@ class Wheel {
         return "Wheel:level=" + level + ", tickCount=" + tickCount + ", tickDuration=" + tickDuration;
     }
 
-    private boolean isEmpty() {
-        for (Bucket bucket : buckets) {
-            if (!bucket.isEmpty()) {
-                return false;
-            }
-        }
-        return true;
+    boolean isEmpty() {
+        return Arrays.stream(buckets).allMatch(Bucket::isEmpty);
     }
 
-    public Bucket findFirstBucket() {
-        for (Bucket bucket : buckets) {
-            if (!bucket.isEmpty()) {
-                return bucket;
-            }
-        }
-        return null;
+    public Optional<Bucket> findFirstBucket() {
+        return Arrays.stream(buckets).filter(bucket -> !bucket.isEmpty()).findFirst();
+    }
+
+    public List<TimerTaskHandle> getAllTasks() {
+        return Arrays.stream(buckets).flatMap(bucket -> bucket.getHandles().stream()).toList();
+    }
+
+    int getLevel() {
+        return level;
+    }
+
+    int getTickDuration() {
+        return tickDuration;
+    }
+
+    ChronoUnit getTimeUnit() {
+        return timeUnit;
+    }
+
+    Instant getBaseTime() {
+        return baseTime;
+    }
+
+    void setBaseTime(Instant baseTime) {
+        this.baseTime = baseTime;
+    }
+
+    Wheel getPrev() {
+        return prev;
     }
 }

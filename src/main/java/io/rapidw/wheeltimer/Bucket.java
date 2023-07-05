@@ -1,22 +1,19 @@
 package io.rapidw.wheeltimer;
 
-import lombok.Data;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-import lombok.val;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Iterator;
 import java.util.LinkedList;
-import java.util.concurrent.Delayed;
-import java.util.concurrent.TimeUnit;
+import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 
-@Slf4j
-class Bucket implements Iterable<TimerTaskHandle> {
+class Bucket {
+    private static final Logger logger = LoggerFactory.getLogger(Bucket.class);
 
-    private final LinkedList<TimerTaskHandle> handles = new LinkedList<>();
-    @Getter
+    private final List<TimerTaskHandle> handles = new LinkedList<>();
     private final Wheel wheel;
     private final int deadlineOffset;
 
@@ -24,41 +21,47 @@ class Bucket implements Iterable<TimerTaskHandle> {
         this.wheel = wheel;
         this.deadlineOffset = deadlineOffset;
     }
-    public void add(TimerTaskHandle handle) {
+    void add(TimerTaskHandle handle) {
         handles.add(handle);
     }
 
-    public void runAndClearTasks() {
+    int runAndClearTasks(Executor executor) {
+        AtomicInteger i = new AtomicInteger();
         handles.forEach(handle ->
         {
             if (!handle.isCancelled()) {
                 handle.setExpired();
-                handle.getTask().run(handle);
+                executor.execute(() -> handle.getTask().run(handle));
+                i.getAndIncrement();
             } else {
-                log.debug("WARNING:: canceled task run");
+                logger.debug("[bug] canceled task run");
             }
         });
         handles.clear();
+        return i.get();
     }
 
-    public Instant getDeadline() {
+    Instant getDeadline() {
         return wheel.getBaseTime().plus(Duration.of(deadlineOffset, wheel.getTimeUnit()));
     }
 
-    @Override
-    public Iterator<TimerTaskHandle> iterator() {
-        return handles.iterator();
-    }
-
-    public boolean isEmpty() {
+    boolean isEmpty() {
         return handles.isEmpty();
     }
 
-    public void clear() {
+    void clear() {
         handles.clear();
     }
 
-    public void remove(TimerTaskHandle handle) {
+    void remove(TimerTaskHandle handle) {
         handles.remove(handle);
+    }
+
+    List<TimerTaskHandle> getHandles() {
+        return handles;
+    }
+
+    Wheel getWheel() {
+        return wheel;
     }
 }
