@@ -57,6 +57,12 @@ public class Timer {
         this.tickDuration = tickDuration;
         this.tickTimeUnit = tickTimeUnit;
     }
+
+    /**
+     * start timer. not mandatory, timer will start when first task is added. only useful when you want to align timer start time
+     *
+     * @param startTime start time of timer
+     */
     public void start(Instant startTime) {
         ensureStarted(startTime);
     }
@@ -82,6 +88,8 @@ public class Timer {
 
     /**
      * shutdown timer and return all uncanceled tasks
+     *
+     * @return all uncanceled tasks
      */
     public List<TimerTaskHandle> stop() {
         logger.debug("stopping timer");
@@ -90,15 +98,29 @@ public class Timer {
         try {
             workerThread.join();
         } catch (InterruptedException e) {
-            logger.error("[bug] interrupted when waiting for worker thread to stop", e);
+            throw new TimerException("[bug] interrupted when waiting for worker thread to stop");
         }
-       	return wheels.stream().flatMap(wheel -> wheel.getAllTasks().stream()).toList();
+        return wheels.stream().flatMap(wheel -> wheel.getAllTasks().stream()).toList();
     }
 
+    /**
+     * add task to timer, delay is the duration from now. Task will be executed one tickDuration early at most.
+     *
+     * @param task  task to run
+     * @param delay delay from now
+     * @return handle to cancel task
+     */
     public TimerTaskHandle addTask(TimerTask task, Duration delay) {
         return addTask(task, Instant.now().plus(delay));
     }
 
+    /**
+     * add task to timer, deadline is the instant to run task. Task will be executed one tickDuration early at most.
+     *
+     * @param task     task to run
+     * @param deadline deadline to run task
+     * @return handle to cancel task
+     */
     public TimerTaskHandle addTask(TimerTask task, Instant deadline) {
         logger.debug("add task, deadline: {}", Formatter.formatInstant(deadline));
         // timer must be started before add task
@@ -132,48 +154,46 @@ public class Timer {
 
                         var baseTime = wheel.findNewBaseTime(now);
                         logger.debug("current wheel level {}, new baseTime {}", wheel.getLevel(), Formatter.formatInstant(baseTime));
-                        var max = baseTime.plus(wheel.getTotalDuration(), wheel.getTimeUnit());
-                        return deadline.isBefore(max) && deadline.isAfter(baseTime);
+                        var maxTime = baseTime.plus(wheel.getTotalDuration());
+                        return deadline.isBefore(maxTime) && deadline.isAfter(baseTime);
                     }).findFirst();
+
                     targetWheel.ifPresentOrElse(wheel -> {
                         logger.debug("found wheel, level {}", wheel.getLevel());
                         this.firstBucket = wheel.addTask(handle);
                         condition.signal();
                     }, () -> {
                         logger.debug("not found wheel, build new wheel");
-                        var lastWheel = wheels.getLast();
-                        var lastWheelBaseTime = lastWheel.findNewBaseTime(now);
-                        var newWheel = buildWheel(lastWheelBaseTime, now, deadline);
-                        this.firstBucket = newWheel.addTask(handle);
+                        var baseTime = wheels.getLast().findNewBaseTime(now);
+                        this.firstBucket = buildWheel(baseTime, now, deadline).addTask(handle);
                         condition.signal();
                     });
                 } else {
-                    var lastWheel = wheels.getLast();
-                    var lastWheelBaseTime = lastWheel.findNewBaseTime(now);
-                    var lastWheelMax = lastWheelBaseTime.plus(lastWheel.getTotalDuration(), lastWheel.getTimeUnit());
-                    if (deadline.isAfter(lastWheelMax)) {
+                    var wheel = wheels.getLast();
+                    var baseTime = wheel.findNewBaseTime(now);
+                    var maxTime = baseTime.plus(wheel.getTotalDuration());
+                    if (deadline.isAfter(maxTime)) {
                         // target deadline is after last wheel, need to build a new wheel
                         logger.debug("need new wheel, build it");
-                        var newWheel = buildWheel(lastWheelBaseTime, now, deadline);
-                        // bucket of new task is always after firstBucket
-                        newWheel.addTask(handle);
+                        buildWheel(baseTime, now, deadline).addTask(handle);
+                        // bucket of new task is always after firstBucket, no need to update firstBucket
                         condition.signal();
                     } else {
                         logger.debug("no need new wheel, add to existing wheel");
                         var iter = wheels.descendingIterator();
                         while (iter.hasNext()) {
-                            Wheel wheel = iter.next();
-                            lastWheelBaseTime = wheel.findNewBaseTime(now);
-                            var currentWheelMax = lastWheelBaseTime.plus(wheel.getTotalDuration(), wheel.getTimeUnit());
+                            wheel = iter.next();
+                            baseTime = wheel.findNewBaseTime(now);
+                            maxTime = baseTime.plus(wheel.getTotalDuration());
                             logger.debug("current wheel {}", wheel);
-                            if (deadline.isAfter(lastWheelBaseTime) && deadline.isBefore(currentWheelMax)) {
-                                // 如果延迟在这个轮的范围内
+                            if (deadline.isAfter(baseTime) && deadline.isBefore(maxTime)) {
+                                // deadline in this wheel
                                 logger.debug("wheel found, add to it");
-//                                wheel.setBaseTime(baseTime);
                                 var bucket = wheel.addTask(handle);
-                                if (bucket.getDeadline().isBefore(firstBucket.getDeadline()))
-                                    // 新加入的bucket的deadline比当前最新的deadline更靠前，唤醒worker线程去等待新加入的bucket
+                                if (bucket.getDeadline().isBefore(firstBucket.getDeadline())) {
+                                    // bucket of new task is before firstBucket, set it as firstBucket
                                     this.firstBucket = bucket;
+                                }
                                 condition.signal();
                                 break;
                             } else {
@@ -191,38 +211,41 @@ public class Timer {
         return handle;
     }
 
-    // build wheel should base on new base time
+    /**
+     * build wheels. When lastWheelBaseTime is not null, build a wheel with baseTime of it. Otherwise, build a wheel with baseTime of startTime.
+     *
+     * @param lastWheelBaseTime base time of last wheel
+     * @param now               current time
+     * @param deadline          deadline of new task
+     * @return last wheel of new wheels
+     */
     private Wheel buildWheel(Instant lastWheelBaseTime, Instant now, Instant deadline) {
         logger.debug("building new wheels");
-        // 剩余的时长
         Duration remaining;
+        Wheel prev = null;
+        Wheel current;
+        int currentTickDuration;
         if (lastWheelBaseTime != null) {
+            // has wheels
             remaining = Duration.between(lastWheelBaseTime, deadline);
+            currentTickDuration = wheels.getLast().getTickDuration() * this.tickPerWheel;
         } else {
+            // compute baseTime based on startTime and now
             var baseTime = this.startTime.plus(Duration.between(this.startTime, now).get(this.tickTimeUnit) / tickDuration / this.tickPerWheel * this.tickPerWheel * tickDuration, this.tickTimeUnit);
             remaining = Duration.between(baseTime, deadline);
+            currentTickDuration = this.tickDuration;
         }
 
-        Wheel prev = null;
-        int currentTickDuration;
-        if (!wheels.isEmpty()) {
-            prev = wheels.getLast();
-            currentTickDuration = prev.getTickDuration() * this.tickPerWheel;
-        } else {
-            currentTickDuration = this.tickDuration;
-            remaining = Duration.between(startTime, deadline);
-        }
         logger.debug("remaining {}, currentTickDuration {}", Formatter.formatDuration(remaining), currentTickDuration);
-        Wheel current;
         do {
+            // baseTime will be updated in addTask
             current = new Wheel(this.tickPerWheel, currentTickDuration, this.tickTimeUnit, this.startTime, prev);
             prev = current;
             wheels.addLast(prev);
-            remaining = remaining.minus(current.getTotalDuration(), current.getTimeUnit());
+            remaining = remaining.minus(current.getTotalDuration());
             currentTickDuration = currentTickDuration * this.tickPerWheel;
             logger.debug("new remaining {}, new currentTickDuration {}", Formatter.formatDuration(remaining), currentTickDuration);
         } while (!remaining.isNegative() && !remaining.isZero());
-
         return current;
     }
 
@@ -236,6 +259,42 @@ public class Timer {
         cancelledTaskCounter.incrementAndGet();
     }
 
+    /**
+     * count of tasks added to this timer
+     *
+     * @return task count
+     */
+    public int getAllTaskCount() {
+        return allTaskCounter.get();
+    }
+
+    /**
+     * count of tasks scheduled to execute, including cancelled tasks
+     *
+     * @return task count
+     */
+    public int getScheduledTaskCount() {
+        return scheduledTaskCounter.get();
+    }
+
+    /**
+     * count of tasks cancelled
+     *
+     * @return task count
+     */
+    public int getCancelledTaskCount() {
+        return cancelledTaskCounter.get();
+    }
+
+    /**
+     * count of tasks executed
+     *
+     * @return task count
+     */
+    public int getExecutedTaskCount() {
+        return executedTaskCounter.get();
+    }
+
     private class Worker implements Runnable {
         @Override
         public void run() {
@@ -246,16 +305,15 @@ public class Timer {
                 while (workerThreadStatus == WorkerThreadStatus.START) {
                     processCancelledTasks();
                     if (firstBucket == null) {
-                        // 当前没有定时器
+                        // nothing to run, wait
                         logger.debug("no bucket, await");
                         condition.await();
                         logger.debug("no bucket await finished");
                     } else {
-                        // 有定时器，取出第一个bucket的延时
                         logger.debug("firstBucket deadline: {}", Formatter.formatInstant(firstBucket.getDeadline()));
                         var delay = Duration.between(Instant.now(), firstBucket.getDeadline());
                         if (!delay.isNegative()) {
-                            // 如果延时>0，等待
+                            // delay > 0, wait
                             logger.debug("wait for first bucket, delay: {}", Formatter.formatDuration(delay));
                             var res = condition.awaitNanos(delay.toNanos());
                             if (res > 0) {
@@ -264,28 +322,35 @@ public class Timer {
                         } else {
                             // delay <= 0, time to run
                             logger.debug("run first bucket");
-                            if (firstBucket.getWheel().getPrev() != null) {
-                                // 不是最小的轮，任务降轮
+                            var prev = firstBucket.getWheel().getPrev();
+                            if (prev != null) {
+                                // wheel level is not 1, move task to prev wheel
                                 logger.debug("task down wheel");
-                                var prev = firstBucket.getWheel().getPrev();
-                                Bucket bucket;
-                                Bucket newFirstBucket = null;
                                 if (!firstBucket.isEmpty()) {
-                                    for (TimerTaskHandle timerTaskHandle : firstBucket.getHandles()) {
-                                        bucket = prev.addTask(timerTaskHandle);
-                                        logger.debug("new bucket deadline: {}", Formatter.formatInstant(bucket.getDeadline()));
-                                        if (newFirstBucket == null) {
-                                            // assign first bucket to newFirstBucket
-                                            newFirstBucket = bucket;
-                                        } else if (bucket.getDeadline().isBefore(newFirstBucket.getDeadline())) {
-                                            newFirstBucket = bucket;
-                                        }
-                                    }
-                                    firstBucket.clear();
-                                    firstBucket = newFirstBucket;
+                                    // firstBucket must not be empty for there are tasks to run in it
+//                                    Bucket bucket;
+//                                    Bucket newFirstBucket = null;
+
+                                    firstBucket.getHandles().stream().map(prev::addTask).min(Comparator.comparing(Bucket::getDeadline)).ifPresent(it -> {
+                                        firstBucket.clear();
+                                        firstBucket = it;
+                                    });
+
+//                                    for (TimerTaskHandle timerTaskHandle : firstBucket.getHandles()) {
+//                                        bucket = prev.addTask(timerTaskHandle);
+//                                        logger.debug("new bucket deadline: {}", Formatter.formatInstant(bucket.getDeadline()));
+//                                        if (newFirstBucket == null) {
+//                                            // assign first bucket to newFirstBucket
+//                                            newFirstBucket = bucket;
+//                                        } else if (bucket.getDeadline().isBefore(newFirstBucket.getDeadline())) {
+//                                            newFirstBucket = bucket;
+//                                        }
+//                                    }
+//                                    firstBucket.clear();
+//                                    firstBucket = newFirstBucket;
                                     logger.debug("new first bucket deadline: {}", Formatter.formatInstant(firstBucket.getDeadline()));
                                 } else {
-                                    logger.error("[bug] first bucket is empty");
+                                    throw new TimerException("[bug] first bucket is empty");
                                 }
                             } else {
                                 logger.debug("run task");
@@ -307,9 +372,7 @@ public class Timer {
 
         private void processCancelledTasks() {
             logger.debug("process cancelled tasks");
-            for (TimerTaskHandle handle : cancelledHandles) {
-                handle.getBucket().remove(handle);
-            }
+            cancelledHandles.forEach(handle -> handle.getBucket().remove(handle));
             cancelledHandles.clear();
         }
 

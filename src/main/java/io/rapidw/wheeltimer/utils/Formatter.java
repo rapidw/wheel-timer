@@ -19,8 +19,11 @@ public class Formatter {
         duration = duration.minusHours(hours);
         long minutes = duration.toMinutes();
         duration = duration.minusMinutes(minutes);
-        long seconds = duration.getSeconds();
+        long seconds = duration.toSeconds();
+        duration = duration.minusSeconds(seconds);
+        long millis = duration.toMillis();
         return (days == 0 ? "" : days + " days, ") + (hours == 0 ? "" : hours + " hours, ") +
-                (minutes == 0 ? "" : minutes + " minutes, ") + (seconds == 0 ? "" : seconds + " seconds");
+                (minutes == 0 ? "" : minutes + " minutes, ") + (seconds == 0 ? "" : seconds + " seconds, ") +
+                (millis == 0 ? "" : millis + " millis");
     }
 }

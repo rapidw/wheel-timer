@@ -47,16 +47,22 @@ class TimerSpec extends Specification {
 
     def "basic3"() {
         given:
+
         def timer = new Timer(Executors.newSingleThreadExecutor(), 3, 1, ChronoUnit.SECONDS)
         logger.debug("adding 2")
-        timer.addTask((handle) -> logger.info("run 2"), Duration.of(2, ChronoUnit.SECONDS))
+        def start = Instant.now()
+        Instant end = start
+        timer.addTask((handle) -> end = Instant.now(), Duration.of(2, ChronoUnit.SECONDS))
         logger.debug("sleep 10")
         Thread.sleep(10000)
-        logger.debug("adding 5")
-        timer.addTask((handle) -> logger.info("run 5"), Duration.of(5, ChronoUnit.SECONDS))
-        logger.debug("sleep 8")
-        Thread.sleep(8000)
-        logger.debug("sleep finished")
+
+        expect:
+        Duration.between(start, end).toMillis() > 1000 && Duration.between(start, end).toMillis() <= 2000
+//        logger.debug("adding 5")
+//        timer.addTask((handle) -> logger.info("run 5"), Duration.of(5, ChronoUnit.SECONDS))
+//        logger.debug("sleep 8")
+//        Thread.sleep(8000)
+//        logger.debug("sleep finished")
     }
 
     def "cancel"() {

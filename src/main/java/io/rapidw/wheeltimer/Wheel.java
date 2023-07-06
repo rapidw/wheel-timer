@@ -57,6 +57,11 @@ class Wheel {
         return bucket;
     }
 
+    /**
+     * if the wheel is empty, find the new base time, otherwise return the current base time
+     * @param instant deadline of the task
+     * @return base time
+     */
     Instant findNewBaseTime(Instant instant) {
         if (isEmpty()) {
             return this.baseTime.plus(Duration.between(this.baseTime, instant).get(timeUnit) / tickDuration / tickCount * tickCount * tickDuration, timeUnit);
@@ -65,8 +70,8 @@ class Wheel {
         }
     }
 
-    public int getTotalDuration() {
-        return tickCount * tickDuration;
+    public Duration getTotalDuration() {
+        return Duration.of((long) tickCount * tickDuration, timeUnit);
     }
 
     public String toString() {
