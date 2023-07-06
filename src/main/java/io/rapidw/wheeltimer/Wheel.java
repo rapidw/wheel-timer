@@ -45,7 +45,7 @@ class Wheel {
         if (this.isEmpty()) {
             logger.debug("update baseTime, old baseTime {}", Formatter.formatInstant(this.baseTime));
             // new baseTime should be integral times of tickDuration plus old baseTime
-            this.baseTime = this.baseTime.plus(Duration.between(this.baseTime, handle.getDeadline()).get(timeUnit) / tickDuration / tickCount * tickCount * tickDuration, timeUnit);
+            this.baseTime = computeTime(this.baseTime, handle.getDeadline(), this.tickCount, this.tickDuration, this.timeUnit);
         }
         // 找到bucket并放入
         var no = Duration.between(this.baseTime, handle.getDeadline()).get(timeUnit) / tickDuration % tickCount;
@@ -62,9 +62,9 @@ class Wheel {
      * @param instant deadline of the task
      * @return base time
      */
-    Instant findNewBaseTime(Instant instant) {
+    Instant findNewBaseTime(Instant target) {
         if (isEmpty()) {
-            return this.baseTime.plus(Duration.between(this.baseTime, instant).get(timeUnit) / tickDuration / tickCount * tickCount * tickDuration, timeUnit);
+            return computeTime(this.baseTime, target, this.tickCount, this.tickDuration, this.timeUnit);
         } else {
             return this.baseTime;
         }
@@ -112,5 +112,9 @@ class Wheel {
 
     Wheel getPrev() {
         return prev;
+    }
+
+    public static Instant computeTime(Instant base, Instant target, int tickCount, int tickDuration, ChronoUnit timeUnit) {
+        return base.plus(Duration.between(base, target).get(timeUnit) / tickDuration / tickCount * tickCount * tickDuration, timeUnit);
     }
 }

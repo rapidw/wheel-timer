@@ -231,7 +231,7 @@ public class Timer {
             currentTickDuration = wheels.getLast().getTickDuration() * this.tickPerWheel;
         } else {
             // compute baseTime based on startTime and now
-            var baseTime = this.startTime.plus(Duration.between(this.startTime, now).get(this.tickTimeUnit) / tickDuration / this.tickPerWheel * this.tickPerWheel * tickDuration, this.tickTimeUnit);
+            var baseTime = Wheel.computeTime(this.startTime, now, this.tickPerWheel, this.tickDuration, this.tickTimeUnit);
             remaining = Duration.between(baseTime, deadline);
             currentTickDuration = this.tickDuration;
         }
