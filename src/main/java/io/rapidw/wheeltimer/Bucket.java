@@ -3,8 +3,6 @@ package io.rapidw.wheeltimer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -15,9 +13,9 @@ class Bucket {
 
     private final List<TimerTaskHandle> handles = new LinkedList<>();
     private final Wheel wheel;
-    private final int deadlineOffset;
+    private final long deadlineOffset;
 
-    public Bucket(Wheel wheel, int deadlineOffset) {
+    public Bucket(Wheel wheel, long deadlineOffset) {
         this.wheel = wheel;
         this.deadlineOffset = deadlineOffset;
     }
@@ -41,8 +39,8 @@ class Bucket {
         return i.get();
     }
 
-    Instant getDeadline() {
-        return wheel.getBaseTime().plus(Duration.of(deadlineOffset, wheel.getTimeUnit()));
+    long getDeadline() {
+        return wheel.getBaseTime() + deadlineOffset;
     }
 
     boolean isEmpty() {

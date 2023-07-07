@@ -4,11 +4,10 @@ import io.rapidw.wheeltimer.utils.Formatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -17,8 +16,8 @@ public class Timer {
     private static final Logger logger = LoggerFactory.getLogger(Timer.class);
 
     private final int tickPerWheel;
-    private final int tickDuration;
-    private final ChronoUnit tickTimeUnit;
+    private final long tickDuration;
+//    private final ChronoUnit tickTimeUnit;
 
     private final Thread workerThread;
     private final Executor executor;
@@ -43,46 +42,41 @@ public class Timer {
     // thread safe queue, not guarded by lock
     private final Queue<TimerTaskHandle> cancelledHandles = new ConcurrentLinkedQueue<>();
 
-    private Instant startTime;
+    private long startTime;
     private final AtomicInteger allTaskCounter = new AtomicInteger(0);
     private final AtomicInteger scheduledTaskCounter = new AtomicInteger(0);
     private final AtomicInteger cancelledTaskCounter = new AtomicInteger(0);
     private final AtomicInteger executedTaskCounter = new AtomicInteger(0);
 
-    public Timer(Executor executor, int tickPerWheel, int tickDuration, ChronoUnit tickTimeUnit) {
+    public Timer(Executor executor, int tickPerWheel, int tickDuration, TimeUnit tickTimeUnit) {
         this.workerThreadStatus = WorkerThreadStatus.INIT;
         this.executor = executor;
         this.workerThread = new Thread(new Worker(), "timer-worker");
         this.tickPerWheel = tickPerWheel;
-        this.tickDuration = tickDuration;
-        this.tickTimeUnit = tickTimeUnit;
+        this.tickDuration = tickTimeUnit.toNanos(tickDuration);
     }
 
     /**
      * start timer. not mandatory, timer will start when first task is added. only useful when you want to align timer start time
      *
-     * @param startTime start time of timer
+     * @param startTimeNanos start time of timer
      */
-    public void start(Instant startTime) {
-        ensureStarted(startTime);
+    public void start(long startTimeNanos) {
+        ensureStarted(startTimeNanos);
     }
 
-    private void ensureStarted(Instant startTime) {
+    private void ensureStarted(Long startTime) {
         logger.debug("starting timer");
         switch (workerThreadStatus) {
             case INIT -> {
                 workerThreadStatus = WorkerThreadStatus.START;
-                if (startTime != null) {
-                    this.startTime = startTime;
-                } else {
-                    this.startTime = Instant.now();
-                }
+                this.startTime = Objects.requireNonNullElseGet(startTime, System::nanoTime);
                 workerThread.start();
             }
             case START -> {
             }
             case SHUTDOWN -> throw new TimerException("cannot be started once stopped");
-            default -> throw new TimerException("[bug] invarid worker thread state");
+            default -> throw new TimerException("[bug] invalid worker thread state");
         }
     }
 
@@ -93,7 +87,9 @@ public class Timer {
      */
     public List<TimerTaskHandle> stop() {
         logger.debug("stopping timer");
+        lock.lock();
         workerThreadStatus = WorkerThreadStatus.SHUTDOWN;
+        lock.unlock();
         workerThread.interrupt();
         try {
             workerThread.join();
@@ -110,8 +106,8 @@ public class Timer {
      * @param delay delay from now
      * @return handle to cancel task
      */
-    public TimerTaskHandle addTask(TimerTask task, Duration delay) {
-        return addTask(task, Instant.now().plus(delay));
+    public TimerTaskHandle addTask(TimerTask task, int delay, TimeUnit delayUnit) {
+        return addTask(task, System.nanoTime() + delayUnit.toNanos(delay));
     }
 
     /**
@@ -121,14 +117,14 @@ public class Timer {
      * @param deadline deadline to run task
      * @return handle to cancel task
      */
-    public TimerTaskHandle addTask(TimerTask task, Instant deadline) {
+    public TimerTaskHandle addTask(TimerTask task, long deadline) {
         logger.debug("add task, deadline: {}", Formatter.formatInstant(deadline));
         // timer must be started before add task
         ensureStarted(null);
 
-        var now = Instant.now();
+        var now = System.nanoTime();
         var handle = new TimerTaskHandle(this, task, deadline);
-        if (deadline.isBefore(now)) {
+        if (deadline < now) {
             logger.debug("deadline is before now, execute immediately");
             executor.execute(() -> {
                 handle.setExpired();
@@ -142,20 +138,21 @@ public class Timer {
             if (wheels.isEmpty()) {
                 logger.debug("no wheel");
                 // no wheels, build one and add task
-                var newWheel = buildWheel(null, now, deadline);
+                var newWheel = buildWheel(null,null, now, deadline);
                 this.firstBucket = newWheel.addTask(handle);
                 condition.signal();
             } else {
                 logger.debug("has wheels");
                 // has wheels, find the right wheel to add task
                 if (isAllWheelEmpty()) {
-                    logger.debug("all wheel empty");
+                    logger.debug("all wheel empty, wheel list size {}", wheels.size());
+                    AtomicInteger i = new AtomicInteger(0);
                     var targetWheel = wheels.stream().filter(wheel -> {
 
                         var baseTime = wheel.findNewBaseTime(now);
-                        logger.debug("current wheel level {}, new baseTime {}", wheel.getLevel(), Formatter.formatInstant(baseTime));
-                        var maxTime = baseTime.plus(wheel.getTotalDuration());
-                        return deadline.isBefore(maxTime) && deadline.isAfter(baseTime);
+                        logger.debug("current wheel level {}, new baseTime {}, i {}", wheel.getLevel(), Formatter.formatInstant(baseTime), i.getAndIncrement());
+                        var maxTime = baseTime + wheel.getTotalDuration();
+                        return deadline < maxTime && deadline > baseTime;
                     }).findFirst();
 
                     targetWheel.ifPresentOrElse(wheel -> {
@@ -164,18 +161,19 @@ public class Timer {
                         condition.signal();
                     }, () -> {
                         logger.debug("not found wheel, build new wheel");
-                        var baseTime = wheels.getLast().findNewBaseTime(now);
-                        this.firstBucket = buildWheel(baseTime, now, deadline).addTask(handle);
+                        var wheel = wheels.getLast();
+                        var baseTime = wheel.findNewBaseTime(now);
+                        this.firstBucket = buildWheel(wheel, baseTime, now, deadline).addTask(handle);
                         condition.signal();
                     });
                 } else {
                     var wheel = wheels.getLast();
                     var baseTime = wheel.findNewBaseTime(now);
-                    var maxTime = baseTime.plus(wheel.getTotalDuration());
-                    if (deadline.isAfter(maxTime)) {
+                    var maxTime = baseTime + wheel.getTotalDuration();
+                    if (deadline > maxTime) {
                         // target deadline is after last wheel, need to build a new wheel
                         logger.debug("need new wheel, build it");
-                        buildWheel(baseTime, now, deadline).addTask(handle);
+                        buildWheel(wheel, baseTime, now, deadline).addTask(handle);
                         // bucket of new task is always after firstBucket, no need to update firstBucket
                         condition.signal();
                     } else {
@@ -184,13 +182,13 @@ public class Timer {
                         while (iter.hasNext()) {
                             wheel = iter.next();
                             baseTime = wheel.findNewBaseTime(now);
-                            maxTime = baseTime.plus(wheel.getTotalDuration());
+                            maxTime = baseTime + wheel.getTotalDuration();
                             logger.debug("current wheel {}", wheel);
-                            if (deadline.isAfter(baseTime) && deadline.isBefore(maxTime)) {
+                            if (deadline > baseTime && deadline < maxTime) {
                                 // deadline in this wheel
                                 logger.debug("wheel found, add to it");
                                 var bucket = wheel.addTask(handle);
-                                if (bucket.getDeadline().isBefore(firstBucket.getDeadline())) {
+                                if (bucket.getDeadline() < firstBucket.getDeadline()) {
                                     // bucket of new task is before firstBucket, set it as firstBucket
                                     this.firstBucket = bucket;
                                 }
@@ -214,38 +212,39 @@ public class Timer {
     /**
      * build wheels. When lastWheelBaseTime is not null, build a wheel with baseTime of it. Otherwise, build a wheel with baseTime of startTime.
      *
-     * @param lastWheelBaseTime base time of last wheel
+     * @param prevBaseTime base time of last wheel
      * @param now               current time
      * @param deadline          deadline of new task
      * @return last wheel of new wheels
      */
-    private Wheel buildWheel(Instant lastWheelBaseTime, Instant now, Instant deadline) {
+    private Wheel buildWheel(Wheel prev, Long prevBaseTime, long now, long deadline) {
         logger.debug("building new wheels");
-        Duration remaining;
-        Wheel prev = null;
+        long remaining;
         Wheel current;
-        int currentTickDuration;
-        if (lastWheelBaseTime != null) {
+        long currentTickDuration;
+        if (prevBaseTime != null) {
             // has wheels
-            remaining = Duration.between(lastWheelBaseTime, deadline);
+            logger.debug("has wheel");
+            remaining = deadline - prevBaseTime;
             currentTickDuration = wheels.getLast().getTickDuration() * this.tickPerWheel;
         } else {
             // compute baseTime based on startTime and now
-            var baseTime = Wheel.computeTime(this.startTime, now, this.tickPerWheel, this.tickDuration, this.tickTimeUnit);
-            remaining = Duration.between(baseTime, deadline);
+            var baseTime = Wheel.computeTime(this.startTime, now, this.tickPerWheel, this.tickDuration);
+            logger.debug("no wheel, new baseTime {}, now {}", Formatter.formatInstant(baseTime), Formatter.formatInstant(now));
+            remaining = deadline - baseTime;
             currentTickDuration = this.tickDuration;
         }
 
         logger.debug("remaining {}, currentTickDuration {}", Formatter.formatDuration(remaining), currentTickDuration);
         do {
             // baseTime will be updated in addTask
-            current = new Wheel(this.tickPerWheel, currentTickDuration, this.tickTimeUnit, this.startTime, prev);
+            current = new Wheel(this.tickPerWheel, currentTickDuration, this.startTime, prev);
             prev = current;
             wheels.addLast(prev);
-            remaining = remaining.minus(current.getTotalDuration());
+            remaining = remaining - current.getTotalDuration();
             currentTickDuration = currentTickDuration * this.tickPerWheel;
             logger.debug("new remaining {}, new currentTickDuration {}", Formatter.formatDuration(remaining), currentTickDuration);
-        } while (!remaining.isNegative() && !remaining.isZero());
+        } while (remaining > 0);
         return current;
     }
 
@@ -303,52 +302,37 @@ public class Timer {
             logger.debug("###LOCK###");
             try {
                 while (workerThreadStatus == WorkerThreadStatus.START) {
+                    logger.debug("new current nanos {}", System.nanoTime());
                     processCancelledTasks();
                     if (firstBucket == null) {
                         // nothing to run, wait
-                        logger.debug("no bucket, await");
+//                        logger.debug("no bucket, await");
                         condition.await();
-                        logger.debug("no bucket await finished");
+//                        logger.debug("no bucket await finished");
                     } else {
-                        logger.debug("firstBucket deadline: {}", Formatter.formatInstant(firstBucket.getDeadline()));
-                        var delay = Duration.between(Instant.now(), firstBucket.getDeadline());
-                        if (!delay.isNegative()) {
+//                        logger.debug("firstBucket deadline: {}, current nanos {}", Formatter.formatInstant(firstBucket.getDeadline()), System.nanoTime());
+                        var delay = firstBucket.getDeadline() - System.nanoTime();
+                        if (delay > 0) {
                             // delay > 0, wait
                             logger.debug("wait for first bucket, delay: {}", Formatter.formatDuration(delay));
-                            var res = condition.awaitNanos(delay.toNanos());
+                            var res = condition.awaitNanos(delay);
                             if (res > 0) {
                                 logger.debug("insufficient delay");
                             }
                         } else {
                             // delay <= 0, time to run
-                            logger.debug("run first bucket");
+//                            logger.debug("run first bucket");
                             var prev = firstBucket.getWheel().getPrev();
                             if (prev != null) {
                                 // wheel level is not 1, move task to prev wheel
-                                logger.debug("task down wheel");
+//                                logger.debug("task down wheel");
                                 if (!firstBucket.isEmpty()) {
                                     // firstBucket must not be empty for there are tasks to run in it
-//                                    Bucket bucket;
-//                                    Bucket newFirstBucket = null;
-
                                     firstBucket.getHandles().stream().map(prev::addTask).min(Comparator.comparing(Bucket::getDeadline)).ifPresent(it -> {
                                         firstBucket.clear();
                                         firstBucket = it;
                                     });
-
-//                                    for (TimerTaskHandle timerTaskHandle : firstBucket.getHandles()) {
-//                                        bucket = prev.addTask(timerTaskHandle);
-//                                        logger.debug("new bucket deadline: {}", Formatter.formatInstant(bucket.getDeadline()));
-//                                        if (newFirstBucket == null) {
-//                                            // assign first bucket to newFirstBucket
-//                                            newFirstBucket = bucket;
-//                                        } else if (bucket.getDeadline().isBefore(newFirstBucket.getDeadline())) {
-//                                            newFirstBucket = bucket;
-//                                        }
-//                                    }
-//                                    firstBucket.clear();
-//                                    firstBucket = newFirstBucket;
-                                    logger.debug("new first bucket deadline: {}", Formatter.formatInstant(firstBucket.getDeadline()));
+//                                    logger.debug("new first bucket deadline: {}", Formatter.formatInstant(firstBucket.getDeadline()));
                                 } else {
                                     throw new TimerException("[bug] first bucket is empty");
                                 }

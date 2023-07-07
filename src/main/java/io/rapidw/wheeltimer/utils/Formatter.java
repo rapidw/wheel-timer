@@ -26,4 +26,12 @@ public class Formatter {
                 (minutes == 0 ? "" : minutes + " minutes, ") + (seconds == 0 ? "" : seconds + " seconds, ") +
                 (millis == 0 ? "" : millis + " millis");
     }
+
+    public static String formatInstant(long nanos) {
+        return formatInstant(Instant.ofEpochSecond(nanos / 1000000000, nanos % 1000000000));
+    }
+
+    public static String formatDuration(long duration) {
+        return formatDuration(Duration.ofNanos(duration));
+    }
 }

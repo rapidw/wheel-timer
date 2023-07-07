@@ -1,17 +1,15 @@
 package io.rapidw.wheeltimer;
 
-import java.time.Instant;
-
 public class TimerTaskHandle {
 
     private final TimerTask task;
-    private final Instant deadline;
+    private final long deadline;
     private final Timer timer;
     private Bucket bucket;
     private volatile boolean canceled = false;
     private volatile boolean expired = false;
 
-    public TimerTaskHandle(Timer timer, TimerTask task, Instant deadline) {
+    public TimerTaskHandle(Timer timer, TimerTask task, long deadline) {
         this.timer = timer;
         this.task = task;
         this.deadline = deadline;
@@ -35,7 +33,7 @@ public class TimerTaskHandle {
         return task;
     }
 
-    public Instant getDeadline() {
+    public long getDeadline() {
         return deadline;
     }
 
