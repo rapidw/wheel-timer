@@ -17,7 +17,6 @@ public class Timer {
 
     private final int tickPerWheel;
     private final long tickDuration;
-//    private final ChronoUnit tickTimeUnit;
 
     private final Thread workerThread;
     private final Executor executor;
@@ -259,7 +258,7 @@ public class Timer {
     }
 
     /**
-     * count of tasks added to this timer
+     * the number of tasks added to this timer
      *
      * @return task count
      */
@@ -268,7 +267,7 @@ public class Timer {
     }
 
     /**
-     * count of tasks scheduled to execute, including cancelled tasks
+     * the number of tasks scheduled to execute, including cancelled tasks
      *
      * @return task count
      */
@@ -277,7 +276,7 @@ public class Timer {
     }
 
     /**
-     * count of tasks cancelled
+     * the number of tasks cancelled
      *
      * @return task count
      */
@@ -286,7 +285,7 @@ public class Timer {
     }
 
     /**
-     * count of tasks executed
+     * the number of tasks executed
      *
      * @return task count
      */
