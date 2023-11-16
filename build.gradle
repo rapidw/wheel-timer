@@ -106,9 +106,9 @@ publishing {
 
 release {
     failOnUnversionedFiles = false
-    pushReleaseVersionBranch = "main"
+    pushReleaseVersionBranch = "master"
     git {
-        requireBranch.set("main")
+        requireBranch.set("master")
     }
 }
 
